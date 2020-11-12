@@ -19,6 +19,12 @@
 
 repo_log="$LOGS_DIR/repo-$(date +%Y%m%d).log"
 
+function add_line_if_missing() {
+  local new_line="${1}"
+  local file="${2}"
+  grep -q "^$new_line" "$file" || sed -i "1s;^;${new_line};" "$file"
+}
+
 # cd to working directory
 cd "$SRC_DIR"
 
@@ -162,7 +168,7 @@ for branch in ${BRANCH_NAME//,/ }; do
 
     # Set up our overlay
     mkdir -p "vendor/$vendor/overlay/microg/"
-    sed -i "1s;^;PRODUCT_PACKAGE_OVERLAYS := vendor/$vendor/overlay/microg\n;" "vendor/$vendor/config/common.mk"
+    add_line_if_missing "PRODUCT_PACKAGE_OVERLAYS := vendor/$vendor/overlay/microg\n" "vendor/$vendor/config/common.mk"
 
     los_ver_major=$(sed -n -e 's/^\s*PRODUCT_VERSION_MAJOR = //p' "vendor/$vendor/config/common.mk")
     los_ver_minor=$(sed -n -e 's/^\s*PRODUCT_VERSION_MINOR = //p' "vendor/$vendor/config/common.mk")
@@ -212,7 +218,7 @@ for branch in ${BRANCH_NAME//,/ }; do
     # Add custom packages to be installed
     if ! [ -z "$CUSTOM_PACKAGES" ]; then
       echo ">> [$(date)] Adding custom packages ($CUSTOM_PACKAGES)"
-      sed -i "1s;^;PRODUCT_PACKAGES += $CUSTOM_PACKAGES\n\n;" "vendor/$vendor/config/common.mk"
+      add_line_if_missing "PRODUCT_PACKAGES += $CUSTOM_PACKAGES\n\n" "vendor/$vendor/config/common.mk"
     fi
 
     if [ "$SIGN_BUILDS" = true ]; then
@@ -220,11 +226,11 @@ for branch in ${BRANCH_NAME//,/ }; do
       # Soong (Android 9+) complains if the signing keys are outside the build path
       ln -sf "$KEYS_DIR" user-keys
       if [ "$android_version_major" -lt "10" ]; then
-        sed -i "1s;^;PRODUCT_DEFAULT_DEV_CERTIFICATE := user-keys/releasekey\nPRODUCT_OTA_PUBLIC_KEYS := user-keys/releasekey\nPRODUCT_EXTRA_RECOVERY_KEYS := user-keys/releasekey\n\n;" "vendor/$vendor/config/common.mk"
+        add_line_if_missing "PRODUCT_DEFAULT_DEV_CERTIFICATE := user-keys/releasekey\nPRODUCT_OTA_PUBLIC_KEYS := user-keys/releasekey\nPRODUCT_EXTRA_RECOVERY_KEYS := user-keys/releasekey\n\n" "vendor/$vendor/config/common.mk"
       fi
 
       if [ "$android_version_major" -ge "10" ]; then
-        sed -i "1s;^;PRODUCT_DEFAULT_DEV_CERTIFICATE := user-keys/releasekey\nPRODUCT_OTA_PUBLIC_KEYS := user-keys/releasekey\n\n;" "vendor/$vendor/config/common.mk"
+        add_line_if_missing "PRODUCT_DEFAULT_DEV_CERTIFICATE := user-keys/releasekey\nPRODUCT_OTA_PUBLIC_KEYS := user-keys/releasekey\n\n" "vendor/$vendor/config/common.mk"
       fi
     fi
 
@@ -251,9 +257,13 @@ for branch in ${BRANCH_NAME//,/ }; do
             repo sync --force-sync --no-clone-bundle &>> "$repo_log"
           fi
 
-          echo ">> [$(date)] Syncing branch repository" | tee -a "$repo_log"
-          cd "$SRC_DIR/$branch_dir"
-          repo sync -c --force-sync &>> "$repo_log"
+          if [ "$SKIP_SYNC" = true ]; then
+            echo ">> [$(date)] Skipping branch sync as requested" | tee -a "$repo_log"
+          else
+            echo ">> [$(date)] Syncing branch repository" | tee -a "$repo_log"
+            cd "$SRC_DIR/$branch_dir"
+            repo sync -c --force-sync &>> "$repo_log"
+          fi
         fi
 
         if [ "$BUILD_OVERLAY" = true ]; then

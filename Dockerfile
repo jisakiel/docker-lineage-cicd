@@ -61,6 +61,9 @@ ENV BUILD_OVERLAY false
 # Clone the full LineageOS mirror (> 200 GB)
 ENV LOCAL_MIRROR false
 
+# Skip repo sync (for local development)
+ENV SKIP_SYNC false
+
 # If you want to preserve old ZIPs set this to 'false'
 ENV CLEAN_OUTDIR false
 
