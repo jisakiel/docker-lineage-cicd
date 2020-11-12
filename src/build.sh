@@ -25,17 +25,25 @@ function add_line_if_missing() {
   grep -q "^$new_line" "$file" || sed -i "1s;^;${new_line};" "$file"
 }
 
+function log() {
+  if [ -z "$2" ]; then
+    echo ">> [$(date)] ${1}"
+  else
+    echo ">> [$(date)] ${1}" | tee "$2"
+  fi
+}
+
 # cd to working directory
 cd "$SRC_DIR"
 
 if [ -f /root/userscripts/begin.sh ]; then
-  echo ">> [$(date)] Running begin.sh"
+  log "Running begin.sh"
   /root/userscripts/begin.sh
 fi
 
 # If requested, clean the OUT dir in order to avoid clutter
 if [ "$CLEAN_OUTDIR" = true ]; then
-  echo ">> [$(date)] Cleaning '$ZIP_DIR'"
+  log "Cleaning '$ZIP_DIR'"
   rm -rf "$ZIP_DIR/"*
 fi
 
@@ -51,9 +59,9 @@ fi
 if [ -d "$SRC_DIR/.repo" ]; then
   branch_dir=$(repo info -o | sed -ne 's/Manifest branch: refs\/heads\///p' | sed 's/[^[:alnum:]]/_/g')
   branch_dir=${branch_dir^^}
-  echo ">> [$(date)] WARNING: old source dir detected, moving source from \"\$SRC_DIR\" to \"\$SRC_DIR/$branch_dir\""
+  log "WARNING: old source dir detected, moving source from \"\$SRC_DIR\" to \"\$SRC_DIR/$branch_dir\""
   if [ -d "$branch_dir" ] && [ -z "$(ls -A "$branch_dir")" ]; then
-    echo ">> [$(date)] ERROR: $branch_dir already exists and is not empty; aborting"
+    log "ERROR: $branch_dir already exists and is not empty; aborting"
   fi
   mkdir -p "$branch_dir"
   find . -maxdepth 1 ! -name "$branch_dir" ! -path . -exec mv {} "$branch_dir" \;
@@ -64,12 +72,12 @@ if [ "$LOCAL_MIRROR" = true ]; then
   cd "$MIRROR_DIR"
 
   if [ ! -d .repo ]; then
-    echo ">> [$(date)] Initializing mirror repository" | tee -a "$repo_log"
+    log "Initializing mirror repository" "$repo_log"
     yes | repo init -u https://github.com/LineageOS/mirror --mirror --no-clone-bundle -p linux &>> "$repo_log"
   fi
 
   # Copy local manifests to the appropriate folder in order take them into consideration
-  echo ">> [$(date)] Copying '$LMANIFEST_DIR/*.xml' to '.repo/local_manifests/'"
+  log "Copying '$LMANIFEST_DIR/*.xml' to '.repo/local_manifests/'"
   mkdir -p .repo/local_manifests
   rsync -a --delete --include '*.xml' --exclude '*' "$LMANIFEST_DIR/" .repo/local_manifests/
 
@@ -80,7 +88,7 @@ if [ "$LOCAL_MIRROR" = true ]; then
       "https://gitlab.com/the-muppets/manifest/raw/mirror/default.xml" .repo/local_manifests/proprietary_gitlab.xml
   fi
 
-  echo ">> [$(date)] Syncing mirror repository" | tee -a "$repo_log"
+  log "Syncing mirror repository" "$repo_log"
   repo sync --force-sync --no-clone-bundle &>> "$repo_log"
 fi
 
@@ -115,7 +123,7 @@ for branch in ${BRANCH_NAME//,/ }; do
         patch_name="android_frameworks_base-Q.patch"
         ;;
       *)
-        echo ">> [$(date)] Building branch $branch is not (yet) suppported"
+        log "Building branch $branch is not (yet) supported"
         exit 1
         ;;
       esac
@@ -125,8 +133,8 @@ for branch in ${BRANCH_NAME//,/ }; do
     mkdir -p "$SRC_DIR/$branch_dir"
     cd "$SRC_DIR/$branch_dir"
 
-    echo ">> [$(date)] Branch:  $branch"
-    echo ">> [$(date)] Devices: $devices"
+    log "Branch:  $branch"
+    log "Devices: $devices"
 
     # Remove previous changes of vendor/cm, vendor/lineage and frameworks/base (if they exist)
     for path in "vendor/cm" "vendor/lineage" "frameworks/base"; do
@@ -138,31 +146,35 @@ for branch in ${BRANCH_NAME//,/ }; do
       fi
     done
 
-    echo ">> [$(date)] (Re)initializing branch repository" | tee -a "$repo_log"
-    if [ "$LOCAL_MIRROR" = true ]; then
-      yes | repo init -u https://github.com/LineageOS/android.git --reference "$MIRROR_DIR" -b "$branch" &>> "$repo_log"
+    if [ "$SKIP_SYNC" = true ]; then
+      log "Skipping (re)initializing branch repository" "$repo_log"
     else
-      yes | repo init -u https://github.com/LineageOS/android.git -b "$branch" &>> "$repo_log"
+      log "(Re)initializing branch repository" "$repo_log"
+      if [ "$LOCAL_MIRROR" = true ]; then
+        yes | repo init -u https://github.com/LineageOS/android.git --reference "$MIRROR_DIR" -b "$branch" &>> "$repo_log"
+      else
+        yes | repo init -u https://github.com/LineageOS/android.git -b "$branch" &>> "$repo_log"
+      fi
+
+      # Copy local manifests to the appropriate folder in order take them into consideration
+      log "Copying '$LMANIFEST_DIR/*.xml' to '.repo/local_manifests/'"
+      mkdir -p .repo/local_manifests
+      rsync -a --delete --include '*.xml' --exclude '*' "$LMANIFEST_DIR/" .repo/local_manifests/
+
+      rm -f .repo/local_manifests/proprietary.xml
+      if [ "$INCLUDE_PROPRIETARY" = true ]; then
+        wget -q -O .repo/local_manifests/proprietary.xml "https://raw.githubusercontent.com/TheMuppets/manifests/$themuppets_branch/muppets.xml"
+        /root/build_manifest.py --remote "https://gitlab.com" --remotename "gitlab_https" \
+          "https://gitlab.com/the-muppets/manifest/raw/$themuppets_branch/muppets.xml" .repo/local_manifests/proprietary_gitlab.xml
+      fi
+
+      log "Syncing branch repository" "$repo_log"
+      repo sync -c --force-sync &>> "$repo_log"
     fi
-
-    # Copy local manifests to the appropriate folder in order take them into consideration
-    echo ">> [$(date)] Copying '$LMANIFEST_DIR/*.xml' to '.repo/local_manifests/'"
-    mkdir -p .repo/local_manifests
-    rsync -a --delete --include '*.xml' --exclude '*' "$LMANIFEST_DIR/" .repo/local_manifests/
-
-    rm -f .repo/local_manifests/proprietary.xml
-    if [ "$INCLUDE_PROPRIETARY" = true ]; then
-      wget -q -O .repo/local_manifests/proprietary.xml "https://raw.githubusercontent.com/TheMuppets/manifests/$themuppets_branch/muppets.xml"
-      /root/build_manifest.py --remote "https://gitlab.com" --remotename "gitlab_https" \
-        "https://gitlab.com/the-muppets/manifest/raw/$themuppets_branch/muppets.xml" .repo/local_manifests/proprietary_gitlab.xml
-    fi
-
-    echo ">> [$(date)] Syncing branch repository" | tee -a "$repo_log"
     builddate=$(date +%Y%m%d)
-    repo sync -c --force-sync &>> "$repo_log"
 
     if [ ! -d "vendor/$vendor" ]; then
-      echo ">> [$(date)] Missing \"vendor/$vendor\", aborting"
+      log "Missing \"vendor/$vendor\", aborting"
       exit 1
     fi
 
@@ -179,11 +191,11 @@ for branch in ${BRANCH_NAME//,/ }; do
       # Determine which patch should be applied to the current Android source tree
       cd frameworks/base
       if [ "$SIGNATURE_SPOOFING" = "yes" ]; then
-        echo ">> [$(date)] Applying the standard signature spoofing patch ($patch_name) to frameworks/base"
-        echo ">> [$(date)] WARNING: the standard signature spoofing patch introduces a security threat"
+        log "Applying the standard signature spoofing patch ($patch_name) to frameworks/base"
+        log "WARNING: the standard signature spoofing patch introduces a security threat"
         patch --quiet -p1 -i "/root/signature_spoofing_patches/$patch_name"
       else
-        echo ">> [$(date)] Applying the restricted signature spoofing patch (based on $patch_name) to frameworks/base"
+        log "Applying the restricted signature spoofing patch (based on $patch_name) to frameworks/base"
         sed 's/android:protectionLevel="dangerous"/android:protectionLevel="signature|privileged"/' "/root/signature_spoofing_patches/$patch_name" | patch --quiet -p1
       fi
       git clean -q -f
@@ -194,11 +206,11 @@ for branch in ${BRANCH_NAME//,/ }; do
       cp /root/signature_spoofing_patches/frameworks_base_config.xml "vendor/$vendor/overlay/microg/frameworks/base/core/res/res/values/config.xml"
     fi
 
-    echo ">> [$(date)] Setting \"$RELEASE_TYPE\" as release type"
+    log "Setting \"$RELEASE_TYPE\" as release type"
     sed -i "/\$(filter .*\$(${vendor^^}_BUILDTYPE)/,+2d" "vendor/$vendor/config/common.mk"
 
     # Set a custom updater URI if a OTA URL is provided
-    echo ">> [$(date)] Adding OTA URL overlay (for custom URL $OTA_URL)"
+    log "Adding OTA URL overlay (for custom URL $OTA_URL)"
     if ! [ -z "$OTA_URL" ]; then
       updater_url_overlay_dir="vendor/$vendor/overlay/microg/packages/apps/Updater/res/values/"
       mkdir -p "$updater_url_overlay_dir"
@@ -210,19 +222,19 @@ for branch in ${BRANCH_NAME//,/ }; do
         # "Old" updater configuration: just the URL
         sed "s|{name}|conf_update_server_url_def|g; s|{url}|$OTA_URL|g" /root/packages_updater_strings.xml > "$updater_url_overlay_dir/strings.xml"
       else
-        echo ">> [$(date)] ERROR: no known Updater URL property found"
+        log "ERROR: no known Updater URL property found"
         exit 1
       fi
     fi
 
     # Add custom packages to be installed
     if ! [ -z "$CUSTOM_PACKAGES" ]; then
-      echo ">> [$(date)] Adding custom packages ($CUSTOM_PACKAGES)"
+      log "Adding custom packages ($CUSTOM_PACKAGES)"
       add_line_if_missing "PRODUCT_PACKAGES += $CUSTOM_PACKAGES\n\n" "vendor/$vendor/config/common.mk"
     fi
 
     if [ "$SIGN_BUILDS" = true ]; then
-      echo ">> [$(date)] Adding keys path ($KEYS_DIR)"
+      log "Adding keys path ($KEYS_DIR)"
       # Soong (Android 9+) complains if the signing keys are outside the build path
       ln -sf "$KEYS_DIR" user-keys
       if [ "$android_version_major" -lt "10" ]; then
@@ -235,11 +247,11 @@ for branch in ${BRANCH_NAME//,/ }; do
     fi
 
     # Prepare the environment
-    echo ">> [$(date)] Preparing build environment"
+    log "Preparing build environment"
     source build/envsetup.sh > /dev/null
 
     if [ -f /root/userscripts/before.sh ]; then
-      echo ">> [$(date)] Running before.sh"
+      log "Running before.sh"
       /root/userscripts/before.sh
     fi
 
@@ -252,15 +264,15 @@ for branch in ${BRANCH_NAME//,/ }; do
           builddate=$currentdate
 
           if [ "$LOCAL_MIRROR" = true ]; then
-            echo ">> [$(date)] Syncing mirror repository" | tee -a "$repo_log"
+            log "Syncing mirror repository" "$repo_log"
             cd "$MIRROR_DIR"
             repo sync --force-sync --no-clone-bundle &>> "$repo_log"
           fi
 
           if [ "$SKIP_SYNC" = true ]; then
-            echo ">> [$(date)] Skipping branch sync as requested" | tee -a "$repo_log"
+            log "Skipping branch sync as requested" "$repo_log"
           else
-            echo ">> [$(date)] Syncing branch repository" | tee -a "$repo_log"
+            log "Syncing branch repository" "$repo_log"
             cd "$SRC_DIR/$branch_dir"
             repo sync -c --force-sync &>> "$repo_log"
           fi
@@ -291,12 +303,12 @@ for branch in ${BRANCH_NAME//,/ }; do
         DEBUG_LOG="$LOGS_DIR/$logsubdir/lineage-$los_ver-$builddate-$RELEASE_TYPE-$codename.log"
 
         if [ -f /root/userscripts/pre-build.sh ]; then
-          echo ">> [$(date)] Running pre-build.sh for $codename" >> "$DEBUG_LOG"
+          log "Running pre-build.sh for $codename" "$DEBUG_LOG"
           /root/userscripts/pre-build.sh $codename &>> "$DEBUG_LOG"
         fi
 
         # Start the build
-        echo ">> [$(date)] Starting build for $codename, $branch branch" | tee -a "$DEBUG_LOG"
+        log "Starting build for $codename, $branch branch" "$DEBUG_LOG"
         build_successful=false
         if brunch $codename &>> "$DEBUG_LOG"; then
           currentdate=$(date +%Y%m%d)
@@ -305,7 +317,7 @@ for branch in ${BRANCH_NAME//,/ }; do
           fi
 
           # Move produced ZIP files to the main OUT directory
-          echo ">> [$(date)] Moving build artifacts for $codename to '$ZIP_DIR/$zipsubdir'" | tee -a "$DEBUG_LOG"
+          log "Moving build artifacts for $codename to '$ZIP_DIR/$zipsubdir'" "$DEBUG_LOG"
           cd out/target/product/$codename
           for build in lineage-*.zip; do
             sha256sum "$build" > "$ZIP_DIR/$zipsubdir/$build.sha256sum"
@@ -314,7 +326,7 @@ for branch in ${BRANCH_NAME//,/ }; do
           cd "$source_dir"
           build_successful=true
         else
-          echo ">> [$(date)] Failed build for $codename" | tee -a "$DEBUG_LOG"
+          log "Failed build for $codename" "$DEBUG_LOG"
         fi
 
         # Remove old zips and logs
@@ -333,10 +345,10 @@ for branch in ${BRANCH_NAME//,/ }; do
           fi
         fi
         if [ -f /root/userscripts/post-build.sh ]; then
-          echo ">> [$(date)] Running post-build.sh for $codename" >> "$DEBUG_LOG"
+          log "Running post-build.sh for $codename" "$DEBUG_LOG"
           /root/userscripts/post-build.sh $codename $build_successful &>> "$DEBUG_LOG"
         fi
-        echo ">> [$(date)] Finishing build for $codename" | tee -a "$DEBUG_LOG"
+        log "Finishing build for $codename" "$DEBUG_LOG"
 
         if [ "$BUILD_OVERLAY" = true ]; then
           # The Jack server must be stopped manually, as we want to unmount $TMP_DIR/merged
@@ -354,7 +366,7 @@ for branch in ${BRANCH_NAME//,/ }; do
         fi
 
         if [ "$CLEAN_AFTER_BUILD" = true ]; then
-          echo ">> [$(date)] Cleaning source dir for device $codename" | tee -a "$DEBUG_LOG"
+          log "Cleaning source dir for device $codename" "$DEBUG_LOG"
           if [ "$BUILD_OVERLAY" = true ]; then
             cd "$TMP_DIR"
             rm -rf ./*
@@ -375,6 +387,6 @@ if [ "$DELETE_OLD_LOGS" -gt "0" ]; then
 fi
 
 if [ -f /root/userscripts/end.sh ]; then
-  echo ">> [$(date)] Running end.sh"
+  log "Running end.sh"
   /root/userscripts/end.sh
 fi
